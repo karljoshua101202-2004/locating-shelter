@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Admin — Shelter Locator</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+
+<!-- ✅ PWA essentials -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0078d7">
+<link rel="apple-touch-icon" href="icon-192.png">
+
+<style>
+html,body {
+  height:100%; margin:0; font-family:Segoe UI, Roboto, Arial, sans-serif; background:#f5f6fa;
+}
+#map {height:50%;}
+#adminPanel {
+  padding:20px; background:#fff; box-shadow:0 4px 12px rgba(0,0,0,0.1);
+  border-radius:12px; width:95%; max-width:800px; margin:20px auto;
+}
+#adminPanel h3 { margin-top:0; text-align:center; color:#333; }
+#adminPanel h4 { margin:15px 0 10px; color:#444; }
+input, select {
+  padding:6px; border:1px solid #ccc;
+  border-radius:6px; font-size:13px; transition: border .2s;
+}
+input:focus, select:focus { border:1px solid #0078d7; outline:none; }
+button {
+  padding:6px 10px; border:none; border-radius:6px;
+  font-size:13px; font-weight:600; cursor:pointer; transition:background .2s;
+}
+#loginBtn, #addShelterBtn, .saveBtn { background:#0078d7; color:#fff; }
+#loginBtn:hover, #addShelterBtn:hover, .saveBtn:hover { background:#005fa3; }
+#logoutBtn { background:#ff4757; color:#fff; }
+#logoutBtn:hover { background:#e84118; }
+#deleteShelterBtn { background:#ffa502; color:#fff; }
+#deleteShelterBtn:hover { background:#e67e22; }
+#shelterForm, #capacityTable { margin-top:20px; border-top:1px solid #ddd; padding-top:15px; }
+table { width:100%; border-collapse:collapse; margin-top:10px; }
+th, td { border:1px solid #ddd; padding:8px; text-align:center; }
+th { background:#f1f1f1; }
+</style>
+</head>
+<body>
+
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('service-worker.js')
+    .then(()=>console.log("Service Worker registered"))
+    .catch(err=>console.error("SW failed:", err));
+}
+</script>
+
+<div id="adminPanel">
+  <h3>🔑 Admin Login</h3>
+  <input type="text" id="adminUser" placeholder="Username">
+  <input type="password" id="adminPass" placeholder="Password">
+  <button id="loginBtn">Login</button>
+  <button id="logoutBtn" style="display:none;">Logout</button>
+
+  <div id="shelterForm" style="display:none;">
+    <h4>🏠 Manage Shelters</h4>
+    <input type="text" id="shelterName" placeholder="Shelter Name">
+    <input type="text" id="shelterLat" placeholder="Latitude">
+    <input type="text" id="shelterLng" placeholder="Longitude">
+    <input type="text" id="shelterCap" placeholder="Capacity (e.g. 1-100)">
+    <button id="addShelterBtn">Add / Update Shelter</button>
+
+    <h4>🗑️ Delete / Edit Shelter</h4>
+    <select id="deleteShelterSelect">
+      <option value="">-- Select Shelter --</option>
+    </select>
+    <button id="deleteShelterBtn">Delete Selected Shelter</button>
+
+    <h4>✏️ Edit Shelter Capacity</h4>
+    <div id="capacityTable"></div>
+  </div>
+</div>
+
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const ADMIN_USER="admin", ADMIN_PASS="1234";
+let isAdmin=false;
+let shelters=JSON.parse(localStorage.getItem('shelters'))||[
+  {name:"malasin", coords:[16.86909, 121.59931], capacity:"1-100"},
+  {name:"SMGCHS", coords:[16.88988,121.5678], capacity:"1-100"}, 
+  {name:"ncc", coords:[16.88115, 121.58619], capacity:"1-400"},
+  {name:"smvhis", coords:[16.90235, 121.61287], capacity:"1-100"},
+  {name:"san ignacio elem school", coords:[16.89716, 121.58842], capacity:"1-100"},
+  {name:"mapuroc elem school", coords:[16.8968, 121.5750], capacity:"1-100"},
+  {name:"san roque elem school", coords:[16.9071, 121.5836], capacity:"1-100"},
+  {name:"estrella elem school", coords:[16.87497, 121.55886], capacity:"1-100"}, 
+  {name:"dagupan elem school", coords:[16.8674, 121.5732], capacity:"1-100"},
+  {name:"snhs", coords:[16.86603, 121.6137], capacity:"1-100"},
+];
+let markers=[];
+const map=L.map('map').setView([16.8827,121.5945],14);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
+
+function renderShelters(){
+  markers.forEach(m=>map.removeLayer(m)); markers=[];
+  shelters.forEach(s=>{
+    const marker=L.circleMarker(s.coords,{radius:8,color:'red',fillColor:'#f03',fillOpacity:0.8})
+      .addTo(map).bindPopup(`<b>${s.name}</b><br>Capacity: ${s.capacity||"N/A"}`);
+    markers.push(marker);
+  });
+  updateDeleteDropdown();
+  renderCapacityTable();
+}
+
+function updateDeleteDropdown(){
+  const select=document.getElementById('deleteShelterSelect');
+  select.innerHTML='<option value="">-- Select Shelter --</option>';
+  shelters.forEach((s,i)=>{
+    const opt=document.createElement('option');
+    opt.value=i;
+    opt.textContent=`${s.name} (${s.capacity||"N/A"})`;
+    select.appendChild(opt);
+  });
+}
+
+function renderCapacityTable(){
+  const div=document.getElementById('capacityTable');
+  let html=`<table><tr><th>Shelter</th><th>Capacity</th><th>Action</th></tr>`;
+  shelters.forEach((s,i)=>{
+    html+=`<tr>
+      <td>${s.name}</td>
+      <td><input type="text" id="cap-${i}" value="${s.capacity||''}" style="width:80px"></td>
+      <td><button class="saveBtn" onclick="saveCapacity(${i})">Save</button></td>
+    </tr>`;
+  });
+  html+="</table>";
+  div.innerHTML=html;
+}
+
+function saveCapacity(i){
+  const newCap=document.getElementById(`cap-${i}`).value;
+  if(!newCap){alert("Enter capacity.");return;}
+  shelters[i].capacity=newCap;
+  localStorage.setItem('shelters',JSON.stringify(shelters));
+  renderShelters();
+
+  document.getElementById('shelterName').value=shelters[i].name;
+  document.getElementById('shelterLat').value=shelters[i].coords[0];
+  document.getElementById('shelterLng').value=shelters[i].coords[1];
+  document.getElementById('shelterCap').value=shelters[i].capacity;
+
+  alert("✅ Capacity updated for "+shelters[i].name);
+}
+
+renderShelters();
+
+document.getElementById('loginBtn').onclick=function(){
+  const u=document.getElementById('adminUser').value, p=document.getElementById('adminPass').value;
+  if(u===ADMIN_USER && p===ADMIN_PASS){
+    isAdmin=true;
+    document.getElementById('shelterForm').style.display="block";
+    this.style.display="none";
+    document.getElementById('logoutBtn').style.display="block";
+    alert("✅ Login successful!");
+  } else alert("❌ Invalid credentials");
+};
+document.getElementById('logoutBtn').onclick=function(){
+  isAdmin=false;
+  document.getElementById('shelterForm').style.display="none";
+  this.style.display="none";
+  document.getElementById('loginBtn').style.display="block";
+  alert("👋 Logged out!");
+};
+document.getElementById('addShelterBtn').onclick=function(){
+  if(!isAdmin){alert("Admin only.");return;}
+  const name=document.getElementById('shelterName').value;
+  const lat=parseFloat(document.getElementById('shelterLat').value);
+  const lng=parseFloat(document.getElementById('shelterLng').value);
+  const cap=document.getElementById('shelterCap').value;
+  if(!name||isNaN(lat)||isNaN(lng)||!cap){alert("Complete fields");return;}
+  const existing=shelters.find(s=>s.name===name);
+  if(existing){ existing.coords=[lat,lng]; existing.capacity=cap; }
+  else shelters.push({name,coords:[lat,lng],capacity:cap});
+  localStorage.setItem('shelters',JSON.stringify(shelters));
+  renderShelters(); alert("Shelter saved!");
+};
+document.getElementById('deleteShelterBtn').onclick=function(){
+  if(!isAdmin){alert("Admin only.");return;}
+  const sel=document.getElementById('deleteShelterSelect').value;
+  if(sel===""){alert("Select a shelter to delete.");return;}
+  if(confirm("Delete this shelter?")){
+    shelters.splice(sel,1);
+    localStorage.setItem('shelters',JSON.stringify(shelters));
+    renderShelters(); alert("Shelter deleted!");
+  }
+};
+
+document.getElementById('deleteShelterSelect').onchange=function(){
+  const i=this.value;
+  if(i===""){ 
+    document.getElementById('shelterName').value="";
+    document.getElementById('shelterLat').value="";
+    document.getElementById('shelterLng').value="";
+    document.getElementById('shelterCap').value="";
+    return;
+  }
+  const s=shelters[i];
+  document.getElementById('shelterName').value=s.name;
+  document.getElementById('shelterLat').value=s.coords[0];
+  document.getElementById('shelterLng').value=s.coords[1];
+  document.getElementById('shelterCap').value=s.capacity||"";
+};
+</script>
+</body>
+</html>
+
+
+
+
+
